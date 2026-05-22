@@ -1,9 +1,6 @@
-# 🎙️ Voice AI Control Center
+# 🎙️ OnSTT
 
-실시간 음성 인식(STT)과 로컬 AI(LM Studio)를 연동하여, 한국어 음성을 일본어로 번역하고 결과를 시각화하는 AI 비서 파이프라인입니다.
-
-## 🏗️ 시스템 아키텍처
-[Image of simple software architecture diagram]
+## 시스템 아키텍처
 
 - **`stt_node.py`**: 마이크 음성 인식(faster-whisper) 및 서버 전송
 - **`cleaner.py`**: KoNLPy(Okt) 기반 텍스트 전처리
@@ -11,7 +8,7 @@
 
 ---
 
-## 🚀 환경 구축 (Installation)
+## 환경 구축 (Installation)
 
 ### 1. 필수 프로그램
 * **Java (OpenJDK 17+)**: `KoNLPy` 구동을 위해 필요합니다.
