@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+
+<html lang="ko">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Voice AI Control Center</title>
+
+    <!-- 구글 폰트 적용 (Pretendard 스타일) -->
+
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css">
+
+    <style>
+
+        :root {
+
+            --bg-color: #f0f2f5;
+
+            --card-bg: #ffffff;
+
+            --primary-color: #1a73e8;
+
+            --secondary-color: #34a853;
+
+            --ai-bg: #202124;
+
+            --ai-text: #8ab4f8;
+
+            --text-main: #202124;
+
+            --text-sub: #5f6368;
+
+        }
+
+
+
+        body {
+
+            font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif;
+
+            background-color: var(--bg-color);
+
+            margin: 0;
+
+            display: flex;
+
+            justify-content: center;
+
+            align-items: center;
+
+            min-height: 100vh;
+
+        }
+
+
+
+        .container {
+
+            width: 100%;
+
+            max-width: 650px;
+
+            padding: 20px;
+
+        }
+
+
+
+        header {
+
+            text-align: center;
+
+            margin-bottom: 30px;
+
+        }
+
+
+
+        h1 {
+
+            font-size: 28px;
+
+            color: var(--primary-color);
+
+            margin: 0;
+
+            display: flex;
+
+            align-items: center;
+
+            justify-content: center;
+
+            gap: 10px;
+
+        }
+
+
+
+        .dashboard {
+
+            display: flex;
+
+            flex-direction: column;
+
+            gap: 20px;
+
+        }
+
+
+
+        .card {
+
+            background: var(--card-bg);
+
+            border-radius: 16px;
+
+            padding: 24px;
+
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05), 0 10px 15px -3px rgba(0,0,0,0.1);
+
+            transition: transform 0.2s ease;
+
+            border-left: 6px solid var(--primary-color);
+
+        }
+
+
+
+        .card:hover {
+
+            transform: translateY(-2px);
+
+        }
+
+
+
+        .card.refined {
+
+            border-left-color: var(--secondary-color);
+
+        }
+
+
+
+        .card.ai {
+
+            background: var(--ai-bg);
+
+            border-left-color: var(--ai-text);
+
+            color: #e8eaed;
+
+        }
+
+
+
+        .label {
+
+            font-size: 13px;
+
+            font-weight: 700;
+
+            text-transform: uppercase;
+
+            letter-spacing: 0.5px;
+
+            color: var(--text-sub);
+
+            margin-bottom: 12px;
+
+            display: flex;
+
+            justify-content: space-between;
+
+        }
+
+
+
+        .ai .label {
+
+            color: var(--ai-text);
+
+        }
+
+
+
+        .content {
+
+            font-size: 18px;
+
+            line-height: 1.6;
+
+            color: var(--text-main);
+
+            word-break: break-all;
+
+            white-space: pre-wrap;
+
+        }
+
+
+
+        .ai .content {
+
+            color: #e8eaed;
+
+            font-weight: 400;
+
+        }
+
+
+
+        .status-bar {
+
+            margin-top: 20px;
+
+            display: flex;
+
+            justify-content: space-between;
+
+            align-items: center;
+
+            font-size: 13px;
+
+            color: var(--text-sub);
+
+            padding: 0 10px;
+
+        }
+
+
+
+        .dot {
+
+            height: 8px;
+
+            width: 8px;
+
+            background-color: var(--secondary-color);
+
+            border-radius: 50%;
+
+            display: inline-block;
+
+            margin-right: 5px;
+
+            animation: blink 1.5s infinite;
+
+        }
+
+
+
+        @keyframes blink {
+
+            0% { opacity: 1; }
+
+            50% { opacity: 0.3; }
+
+            100% { opacity: 1; }
+
+        }
+
+    </style>
+
+</head>
+
+<body>
+
+    <div class="container">
+
+        <header>
+
+            <h1>🎙️ Voice AI Control Center</h1>
+
+        </header>
+
+
+
+        <div class="dashboard">
+
+            <!-- 1. 원본 데이터 카드 -->
+
+            <div class="card">
+
+                <div class="label">Original Voice (Raw)</div>
+
+                <div id="raw-text" class="content">연결 대기 중...</div>
+
+            </div>
+
+
+
+            <!-- 2. 정제 데이터 카드 -->
+
+            <div class="card refined">
+
+                <div class="label">Refined for AI (KoNLPy)</div>
+
+                <div id="refined-text" class="content">라즈베리 파이의 신호를 기다리는 중...</div>
+
+            </div>
+
+
+
+            <!-- 3. AI 답변 카드 -->
+
+            <div class="card ai">
+
+                <div class="label">AI Response (LM Studio) <span id="ai-status"></span></div>
+
+                <div id="ai-text" class="content">AI가 답변을 준비할 준비가 되었습니다.</div>
+
+            </div>
+
+        </div>
+
+
+
+        <div class="status-bar">
+
+            <div><span class="dot"></span> System Live</div>
+
+            <div>Last Update: <span id="time-text">-</span></div>
+
+        </div>
+
+    </div>
+
+
+
+    <script>
+
+        let lastRefined = "";
+
+
+
+        function updateDashboard() {
+
+            fetch('/get_latest')
+
+                .then(response => response.json())
+
+                .then(data => {
+
+                    // 화면 업데이트
+
+                    document.getElementById('raw-text').innerText = data.raw;
+
+                    document.getElementById('refined-text').innerText = data.refined;
+
+                    document.getElementById('ai-text').innerText = data.ai_response;
+
+                    document.getElementById('time-text').innerText = new Date().toLocaleTimeString();
+
+
+
+                    // 새로운 데이터가 왔을 때 시각적 효과 (선택 사항)
+
+                    if (data.refined !== lastRefined && data.refined !== "대기 중...") {
+
+                        console.log("New data received!");
+
+                        lastRefined = data.refined;
+
+                    }
+
+                })
+
+                .catch(err => console.error("데이터 로드 실패:", err));
+
+        }
+
+
+
+        // 0.5초마다 서버와 동기화
+
+        setInterval(updateDashboard, 500);
+
+    </script>
+
+</body>
+
+</html>
