@@ -1,19 +1,26 @@
 import time 
 import requests 
-import socket
 import speech_recognition as sr  
 from faster_whisper import WhisperModel 
-from cleaner import TextCleaner
 
-# 1. IP 주소 자동 설정 함수
-def get_target_ip():
-    hostname = socket.gethostname().lower()
-    if "raspberry" in hostname or "pi" in hostname:
-        return "192.168.50.117"  
-    else:
-        return "127.0.0.1"       
+# 🛠️ 백엔드 실제 고정 API 주소
+API_URL = "http://210.110.250.32:8000"
+HEALTH_CHECK_URL = f"{API_URL}/health"
+SESSION_API_URL = f"{API_URL}/sessions"
+UTTERANCE_API_URL = f"{API_URL}/utterances"
 
-# 2. 하드웨어 환경 감지 및 모델 설정 함수
+def check_server_health():
+    print(f"📡 서버 연결 상태 확인 중... ({HEALTH_CHECK_URL})")
+    try:
+        response = requests.get(HEALTH_CHECK_URL, timeout=3)
+        if response.status_code == 200:
+            print("✅ 서버 연결 성공!")
+            return True
+        return False
+    except Exception as e:
+        print(f"❌ 서버 연결 실패: {e}")
+        return False
+
 def get_model_settings():
     try:
         import torch
@@ -24,80 +31,111 @@ def get_model_settings():
     return "cpu", "int8"
 
 def run_pi_node(): 
-    LAPTOP_IP = get_target_ip()
+    if not check_server_health():
+        print("🚨 서버가 통신 불가능 상태이므로 종료합니다.")
+        return
+
     DEVICE, COMPUTE_TYPE = get_model_settings()
-    
     MODEL_SIZE = "tiny" 
-    SERVER_URL = f"http://{LAPTOP_IP}:5001/process"  # 포트 5001 확인
-    print(f"📡 데이터를 보낼 서버 주소: {SERVER_URL}")	
 
-    # 3. 모델 및 전처리 엔진 초기화 
-    print(f"-> 설정 반영 - Device: {DEVICE}, Compute Type: {COMPUTE_TYPE}")
-    print("모델 로딩 중... (최초 1회 약 5~10초 소요)")
+    print("모델 로딩 중...")
     stt_model = WhisperModel(MODEL_SIZE, device=DEVICE, compute_type=COMPUTE_TYPE) 
-    cleaner = TextCleaner()
-    print("✅ 모델 초기화 완료!")
+    print("✅ 라즈베리파이 STT 엔진 준비 완료!")
 
-    # 🛠️ 추가됨: 마이크 인식기 초기화
     recognizer = sr.Recognizer()
     microphone = sr.Microphone()
     
-    print("🎙️ 주변 소음 환경을 분석 중입니다... 잠시만 조용히 해주세요.")
     with microphone as source:
-        # 주변 소음(선풍기 소리 등)을 1초간 듣고 기준점 설정
         recognizer.adjust_for_ambient_noise(source, duration=1)
-    print("✅ 마이크 준비 완료! 이제 시스템이 듣고 있습니다.")
+    print("✅ 마이크 준비 완료!")
 
-    # 4. 실제 STT를 수행하는 무한 반복 루프
+    # 🛠️ [DB 모델 매칭 Step 1] 유저 ID 설정
+    # SQLAlchemy 모델에 맞춰 user_id는 정수형(Integer)이어야 합니다.
+    # 기본적으로 테스트용 1번 유저를 타겟팅합니다.
+    target_user_id = 1 
+    
+    # 🛠️ [DB 모델 매칭 Step 2] 세션 생성 (필수 값인 topic 포함)
+    print(f"⏳ 백엔드 서버에 회화 세션 생성 요청 중... ({SESSION_API_URL})")
+    session_payload = {
+        "user_id": target_user_id,
+        "topic": "라즈베리파이 실시간 번역 세션",  # ⭕ 필수값(nullable=False) 반영
+        "description": "STT 스트리밍 테스트"
+    }
+    
+    # 서버 응답 실패를 대비한 임시 정수형 세션 ID 기본값
+    current_session_id = 1 
+    
+    try:
+        session_res = requests.post(SESSION_API_URL, json=session_payload, timeout=5)
+        if session_res.status_code in [200, 201]:
+            print("✅ DB 세션 생성 성공!")
+            try:
+                # 서버가 생성 후 리턴해 준 실제 DB의 세션 고유 id(Integer)를 추출합니다.
+                current_session_id = int(session_res.json().get("id", current_session_id))
+                print(f"🔗 연동된 고유 세션 번호(ID): {current_session_id}")
+            except Exception as e:
+                print(f"⚠️ 세션 ID 파싱 실패, 기본값 {current_session_id}번으로 매핑합니다.")
+        else:
+            print(f"⚠️ 세션 생성 실패 (Code: {session_res.status_code}). 기본 1번 세션에 강제 연결합니다.")
+    except Exception as e:
+        print(f"⚠️ 세션 통신 에러: {e}. 기본 1번 세션으로 진행합니다.")
+
+    # 3. 실시간 음성 인식 및 발화 전송 루프
     while True:
         try:
             with microphone as source:
-                print("\n👂 듣는 중... (말씀해주세요)")
-                # timeout=5: 5초 동안 아무 말 없으면 다시 루프
-                # phrase_time_limit=10: 최대 10초 길이까지만 한 번에 녹음
+                print("\n👂 듣는 중... (한/일 음성 입력 가능)")
                 audio = recognizer.listen(source, timeout=5, phrase_time_limit=10)
             
-            print("⏳ 음성 감지됨! 텍스트로 변환 중...")
-            
-            # 음성 데이터를 임시 오디오 파일로 저장
+            print("⏳ 음성 감지됨! 텍스트 변환 중...")
             temp_audio_path = "temp_speech.wav"
             with open(temp_audio_path, "wb") as f:
                 f.write(audio.get_wav_data())
             
-            # 음성을 텍스트로 변환
-            segments, info = stt_model.transcribe(temp_audio_path, beam_size=1, language="ko")
+            segments, info = stt_model.transcribe(temp_audio_path, beam_size=1, vad_filter=True)
+            detected_lang = info.language
+            
+            if detected_lang not in ['ko', 'ja']:
+                detected_lang = 'ko'
             
             recognized_text = ""
             for segment in segments:
                 recognized_text += segment.text + " "
             
-            if recognized_text.strip():
-                print(f"🗣️ 인식된 원본: {recognized_text.strip()}")
+            raw_text = recognized_text.strip()
+            
+            if raw_text:
+                print("-" * 50)
+                print(f"🗣️ [라즈베리파이 내부 검증 완료]")
+                print(f"   - 변환된 문자: {raw_text}")
+                print(f"   - 감지된 언어: {detected_lang}")
+                print("-" * 50)
                 
-                # 텍스트 정제
-                cleaned_text = cleaner.clean(recognized_text)
-                print(f"✨ 정제된 결과: {cleaned_text}")
+                print("📡 DB Utterance 테이블 규칙에 맞춰 API 호출 중...")
                 
-                # 서버로 결과 전송
-                data = {
-                    "raw": recognized_text.strip(),
-                    "refined": cleaned_text
+                # 🛠️ [DB 모델 매칭 Step 3] 데이터 양식 전면 수정
+                utterance_payload = {
+                    "session_id": int(current_session_id), # ⭕ 문자열이 아닌 정수(Integer) 데이터 타입 맞춤
+                    "stt_text": raw_text,                  # ⭕ raw_text를 stt_text로 키 명칭 변경 (nullable=False 반영)
+                    "language": detected_lang,             # ⭕ "ko" 또는 "ja" 문자열 데이터
+                    "stt_model": "faster-whisper-tiny"     # 선택 필드 채우기
                 }
-                response = requests.post(SERVER_URL, json=data)
                 
-                if response.status_code == 200:
-                    print("📡 웹 서버(5001)로 전송 성공!")
+                # POST /utterances 주소로 최종 데이터 전송
+                response = requests.post(UTTERANCE_API_URL, json=utterance_payload, timeout=5)
+                
+                if response.status_code in [200, 201]:
+                    print("📡 [성공] 데이터가 백엔드 DB 테이블에 정상 저장되었습니다!")
                 else:
-                    print("⚠️ 서버 전송 실패")
+                    print(f"❌ [실패] 데이터 전송 실패 (응답 코드: {response.status_code})")
+                    print(f"   - 서버 반환 메시지: {response.text}")
                     
         except sr.WaitTimeoutError:
-            # 5초 동안 아무 말도 하지 않았을 때 조용히 다시 듣기 상태로 돌아감
             pass
         except Exception as e:
             print(f"오류 발생: {e}")
             
         time.sleep(0.5)
-
 
 if __name__ == "__main__": 
     run_pi_node()
